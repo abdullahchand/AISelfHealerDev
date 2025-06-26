@@ -1,0 +1,121 @@
+# AI Runtime Environment Configuration
+
+# Master Agent Configuration
+master:
+  agent_id: "master-001"
+  host: "localhost"
+  port: 50051
+  heartbeat_interval: 30
+  max_retries: 3
+  timeout: 60
+
+# Worker Agents Configuration
+workers:
+  - agent_id: "worker-001"
+    host: "localhost"
+    port: 50052
+    heartbeat_interval: 30
+    max_retries: 3
+    timeout: 60
+    apps: ["web-app", "api-server", "database"]
+
+  - agent_id: "worker-002"
+    host: "localhost"
+    port: 50053
+    heartbeat_interval: 30
+    max_retries: 3
+    timeout: 60
+    apps: ["cache", "queue", "monitoring"]
+
+# Application Configurations
+apps:
+  - name: "web-app"
+    command: "python app.py"
+    working_dir: "./web-app"
+    port: 3000
+    env_vars:
+      NODE_ENV: "development"
+      PORT: "3000"
+    dependencies: ["node", "npm"]
+    health_check_url: "http://localhost:3000/health"
+    health_check_interval: 30
+    restart_on_failure: true
+    max_restarts: 3
+
+  - name: "api-server"
+    command: "python api_server.py"
+    working_dir: "./api"
+    port: 8000
+    env_vars:
+      FLASK_ENV: "development"
+      PORT: "8000"
+    dependencies: ["python", "flask"]
+    health_check_url: "http://localhost:8000/health"
+    health_check_interval: 30
+    restart_on_failure: true
+    max_restarts: 3
+
+  - name: "database"
+    command: "redis-server --port 6379"
+    working_dir: "./data"
+    port: 6379
+    env_vars: {}
+    dependencies: ["redis-server"]
+    health_check_port: 6379
+    health_check_interval: 30
+    restart_on_failure: true
+    max_restarts: 3
+
+  - name: "cache"
+    command: "memcached -p 11211"
+    working_dir: "./cache"
+    port: 11211
+    env_vars: {}
+    dependencies: ["memcached"]
+    health_check_port: 11211
+    health_check_interval: 30
+    restart_on_failure: true
+    max_restarts: 3
+
+  - name: "queue"
+    command: "celery -A tasks worker --loglevel=info"
+    working_dir: "./queue"
+    port: null
+    env_vars:
+      CELERY_BROKER_URL: "redis://localhost:6379/0"
+    dependencies: ["celery", "redis"]
+    health_check_interval: 30
+    restart_on_failure: true
+    max_restarts: 3
+
+  - name: "monitoring"
+    command: "prometheus --config.file=prometheus.yml"
+    working_dir: "./monitoring"
+    port: 9090
+    env_vars: {}
+    dependencies: ["prometheus"]
+    health_check_url: "http://localhost:9090/-/healthy"
+    health_check_interval: 30
+    restart_on_failure: true
+    max_restarts: 3
+
+# System Configuration
+system:
+  port_range: [3000, 9000]
+  max_concurrent_apps: 10
+  log_level: "INFO"
+  data_dir: "./data"
+  
+  # Resource thresholds
+  cpu_threshold: 80.0
+  memory_threshold: 85.0
+  disk_threshold: 90.0
+  
+  # Health check settings
+  health_check_timeout: 5
+  startup_timeout: 60
+  
+  # Logging
+  log_file: "./logs/ai_runtime.log"
+  log_rotation: "daily"
+  log_retention: 7  # days 

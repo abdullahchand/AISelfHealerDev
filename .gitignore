@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+*.log
+*.sqlite3
+*.db
+*.pkl
+*.h5
+*.pt
+*.ckpt
+*.onnx
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints
+
+# Virtualenv
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables and secrets
+.env
+.env.*
+*.env
+
+# Node/Vite/React
+node_modules/
+dist/
+build/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# Frontend
+.dashboard/frontend/dist/
+dashboard/frontend/node_modules/
+
+# Data
+/data/
+*.csv
+*.tsv
+*.parquet
+*.jsonl
+
+# Misc
+*.bak
+*.swp
+*.tmp
+*.orig
+
+# OS
+Thumbs.db
+ehthumbs.db
+Icon?
+
+# VSCode/IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw? 

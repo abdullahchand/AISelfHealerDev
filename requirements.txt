@@ -1,0 +1,13 @@
+grpcio==1.59.3
+grpcio-tools==1.59.3
+protobuf==4.25.1
+typer==0.9.0
+rich==13.7.0
+psutil==5.9.6
+redis==5.0.1
+openai==1.12.0
+pydantic==2.5.3
+pyyaml==6.0.1
+aiofiles==23.2.1
+watchdog==3.0.0
+requests==2.31.0 

@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package ai_runtime;
+
+// Service for communication between Master and Worker agents
+service AgentService {
+  // Heartbeat from worker to master
+  rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+  
+  // Worker reports status to master
+  rpc ReportStatus (StatusReport) returns (StatusResponse);
+  
+  // Master assigns tasks to worker
+  rpc AssignTask (TaskAssignment) returns (TaskResponse);
+  
+  // Worker notifies master of issues
+  rpc NotifyIssue (IssueNotification) returns (IssueResponse);
+  
+  // Master requests worker to perform action
+  rpc ExecuteAction (ActionRequest) returns (ActionResponse);
+  
+  // Environment state synchronization
+  rpc SyncState (StateSync) returns (StateResponse);
+}
+
+// Heartbeat message
+message HeartbeatRequest {
+  string worker_id = 1;
+  int64 timestamp = 2;
+  string status = 3;  // "healthy", "degraded", "unhealthy"
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  string message = 2;
+}
+
+// Status reporting
+message StatusReport {
+  string worker_id = 1;
+  string app_name = 2;
+  string status = 3;  // "running", "stopped", "error", "starting"
+  int32 port = 4;
+  double cpu_usage = 5;
+  double memory_usage = 6;
+  repeated string logs = 7;
+  int64 timestamp = 8;
+}
+
+message StatusResponse {
+  bool received = 1;
+  string message = 2;
+}
+
+// Task assignment
+message TaskAssignment {
+  string task_id = 1;
+  string worker_id = 2;
+  string action = 3;  // "start", "stop", "restart", "diagnose", "heal"
+  string app_name = 4;
+  map<string, string> parameters = 5;
+  int32 priority = 6;
+}
+
+message TaskResponse {
+  bool accepted = 1;
+  string message = 2;
+  string task_id = 3;
+}
+
+// Issue notification
+message IssueNotification {
+  string worker_id = 1;
+  string app_name = 2;
+  string issue_type = 3;  // "port_conflict", "process_crash", "dependency_missing", "timeout"
+  string description = 4;
+  double confidence_score = 5;
+  repeated string logs = 6;
+  map<string, string> context = 7;
+  int64 timestamp = 8;
+}
+
+message IssueResponse {
+  bool acknowledged = 1;
+  string action = 2;  // "investigate", "auto_fix", "manual_review"
+  string message = 3;
+}
+
+// Action execution
+message ActionRequest {
+  string action_id = 1;
+  string worker_id = 2;
+  string action_type = 3;  // "restart", "change_port", "update_config", "install_dependency"
+  map<string, string> parameters = 4;
+  int32 timeout_seconds = 5;
+}
+
+message ActionResponse {
+  bool success = 1;
+  string result = 2;
+  string error_message = 3;
+  map<string, string> metadata = 4;
+}
+
+// State synchronization
+message StateSync {
+  string agent_id = 1;
+  string agent_type = 2;  // "master" or "worker"
+  map<string, string> state = 3;
+  repeated string active_apps = 4;
+  map<string, int32> port_allocations = 5;
+  int64 timestamp = 6;
+}
+
+message StateResponse {
+  bool synced = 1;
+  map<string, string> master_state = 2;
+  repeated string conflicts = 3;
+} 
