@@ -10,4 +10,7 @@ pydantic==2.5.3
 pyyaml==6.0.1
 aiofiles==23.2.1
 watchdog==3.0.0
-requests==2.31.0 
+requests==2.31.0
+# Local SLM dependencies
+transformers==4.39.3
+torch==2.2.2 

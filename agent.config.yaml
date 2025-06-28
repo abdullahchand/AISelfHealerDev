@@ -119,3 +119,15 @@ system:
   log_file: "./logs/ai_runtime.log"
   log_rotation: "daily"
   log_retention: 7  # days 
+
+# LLM/SLM Configuration
+llm:
+  backend: "openai"      # Options: slm-local, openai
+  model_name: "gpt-3.5-turbo"
+  device: "cpu"          # Options: cpu, cuda
+  max_tokens: 512
+  temperature: 0.2
+  # Memory optimization settings
+  enable_memory_optimization: true
+  max_concurrent_requests: 5
+  request_timeout: 30 

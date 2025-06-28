@@ -3,111 +3,176 @@ import json
 import logging
 from typing import Dict, List, Optional, Tuple
 from shared.models import Issue, Task, ActionType, IssueType
+import os
+from shared.config import ConfigManager
+
+try:
+    from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+    import torch
+except ImportError:
+    AutoModelForCausalLM = None
+    AutoTokenizer = None
+    pipeline = None
+    torch = None
 
 
 class LLMAnalyzer:
-    """Uses OpenAI LLM to analyze issues and make intelligent decisions."""
+    """Uses OpenAI LLM or local SLM to analyze issues and make intelligent decisions."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo"):
-        self.model = model
+    def __init__(self, api_key: Optional[str] = None, model: str = None):
         self.logger = logging.getLogger(__name__)
-        
-        if api_key:
-            openai.api_key = api_key
-        else:
-            # Try to get from environment
-            import os
-            api_key = os.getenv("OPENAI_API_KEY")
-            if api_key:
-                openai.api_key = api_key
+        self.config = ConfigManager().config.get("llm", {})
+        self.backend = self.config.get("backend", "slm-local")
+        self.model_name = self.config.get("model_name", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+        self.device = self.config.get("device", "cpu")
+        self.max_tokens = self.config.get("max_tokens", 512)
+        self.temperature = self.config.get("temperature", 0.2)
+        self.model = model or self.model_name
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self._local_model = None
+        self._local_tokenizer = None
+        self._local_pipeline = None
+        if self.backend == "openai":
+            if self.api_key:
+                openai.api_key = self.api_key
             else:
                 self.logger.warning("No OpenAI API key provided. LLM features will be disabled.")
-    
+        elif self.backend == "slm-local":
+            self._load_local_slm()
+
+    def _load_local_slm(self):
+        if not (AutoModelForCausalLM and AutoTokenizer and pipeline):
+            self.logger.error("transformers not installed. Please install 'transformers' and 'torch'.")
+            return
+        try:
+            self._local_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self._local_model = AutoModelForCausalLM.from_pretrained(self.model_name)
+            self._local_pipeline = pipeline(
+                "text-generation",
+                model=self._local_model,
+                tokenizer=self._local_tokenizer,
+                device=0 if self.device == "cuda" and torch.cuda.is_available() else -1
+            )
+            self.logger.info(f"Loaded local SLM: {self.model_name} on {self.device}")
+        except Exception as e:
+            self.logger.error(f"Failed to load local SLM: {e}")
+            self._local_model = None
+            self._local_tokenizer = None
+            self._local_pipeline = None
+
+    async def _call_local_slm(self, prompt: str) -> str:
+        if not self._local_pipeline:
+            self.logger.error("Local SLM pipeline not loaded.")
+            return "{}"
+        try:
+            outputs = self._local_pipeline(
+                prompt,
+                max_new_tokens=self.max_tokens,
+                temperature=self.temperature,
+                do_sample=True
+            )
+            return outputs[0]["generated_text"][len(prompt):].strip()
+        except Exception as e:
+            self.logger.error(f"Local SLM inference error: {e}")
+            return "{}"
+
     async def analyze_issue(self, issue: Issue, available_workers: List[Dict]) -> Dict:
         """Analyze an issue and determine the best course of action."""
-        if not openai.api_key:
-            return self._fallback_analysis(issue, available_workers)
-        
-        try:
-            # Prepare context for the LLM
+        if self.backend == "openai":
+            if not self.api_key:
+                return self._fallback_analysis(issue, available_workers)
+            try:
+                context = self._prepare_issue_context(issue, available_workers)
+                prompt = self._create_analysis_prompt(context)
+                response = await openai.ChatCompletion.acreate(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": self._get_system_prompt()},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens
+                )
+                analysis = self._parse_llm_response(response.choices[0].message.content)
+                self.logger.info(f"LLM analysis for issue {issue.issue_id}: {analysis}")
+                return analysis
+            except Exception as e:
+                self.logger.error(f"Error in LLM analysis: {e}")
+                return self._fallback_analysis(issue, available_workers)
+        elif self.backend == "slm-local":
             context = self._prepare_issue_context(issue, available_workers)
-            
-            # Create the prompt
             prompt = self._create_analysis_prompt(context)
-            
-            # Call OpenAI
-            response = await openai.ChatCompletion.acreate(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self._get_system_prompt()},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=500
-            )
-            
-            # Parse the response
-            analysis = self._parse_llm_response(response.choices[0].message.content)
-            
-            self.logger.info(f"LLM analysis for issue {issue.issue_id}: {analysis}")
+            response = await self._call_local_slm(prompt)
+            analysis = self._parse_llm_response(response)
+            self.logger.info(f"SLM analysis for issue {issue.issue_id}: {analysis}")
             return analysis
-            
-        except Exception as e:
-            self.logger.error(f"Error in LLM analysis: {e}")
+        else:
             return self._fallback_analysis(issue, available_workers)
     
     async def decide_worker_assignment(self, task: Task, available_workers: List[Dict]) -> Optional[str]:
         """Decide which worker should handle a specific task."""
-        if not openai.api_key:
-            return self._fallback_worker_selection(task, available_workers)
-        
-        try:
+        if self.backend == "openai":
+            if not self.api_key:
+                return self._fallback_worker_selection(task, available_workers)
+            try:
+                context = self._prepare_task_context(task, available_workers)
+                prompt = self._create_worker_selection_prompt(context)
+                response = await openai.ChatCompletion.acreate(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": self._get_worker_selection_system_prompt()},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=200
+                )
+                decision = self._parse_worker_selection_response(response.choices[0].message.content)
+                self.logger.info(f"LLM worker selection for task {task.task_id}: {decision}")
+                return decision
+            except Exception as e:
+                self.logger.error(f"Error in LLM worker selection: {e}")
+                return self._fallback_worker_selection(task, available_workers)
+        elif self.backend == "slm-local":
             context = self._prepare_task_context(task, available_workers)
             prompt = self._create_worker_selection_prompt(context)
-            
-            response = await openai.ChatCompletion.acreate(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self._get_worker_selection_system_prompt()},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=200
-            )
-            
-            decision = self._parse_worker_selection_response(response.choices[0].message.content)
-            self.logger.info(f"LLM worker selection for task {task.task_id}: {decision}")
+            response = await self._call_local_slm(prompt)
+            decision = self._parse_worker_selection_response(response)
+            self.logger.info(f"SLM worker selection for task {task.task_id}: {decision}")
             return decision
-            
-        except Exception as e:
-            self.logger.error(f"Error in LLM worker selection: {e}")
+        else:
             return self._fallback_worker_selection(task, available_workers)
     
     async def suggest_resolution(self, issue: Issue, worker_capabilities: Dict) -> Dict:
         """Suggest a resolution strategy for an issue."""
-        if not openai.api_key:
-            return self._fallback_resolution_suggestion(issue)
-        
-        try:
+        if self.backend == "openai":
+            if not self.api_key:
+                return self._fallback_resolution_suggestion(issue)
+            try:
+                context = self._prepare_resolution_context(issue, worker_capabilities)
+                prompt = self._create_resolution_prompt(context)
+                response = await openai.ChatCompletion.acreate(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": self._get_resolution_system_prompt()},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=400
+                )
+                resolution = self._parse_resolution_response(response.choices[0].message.content)
+                self.logger.info(f"LLM resolution suggestion for issue {issue.issue_id}: {resolution}")
+                return resolution
+            except Exception as e:
+                self.logger.error(f"Error in LLM resolution suggestion: {e}")
+                return self._fallback_resolution_suggestion(issue)
+        elif self.backend == "slm-local":
             context = self._prepare_resolution_context(issue, worker_capabilities)
             prompt = self._create_resolution_prompt(context)
-            
-            response = await openai.ChatCompletion.acreate(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self._get_resolution_system_prompt()},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                max_tokens=400
-            )
-            
-            resolution = self._parse_resolution_response(response.choices[0].message.content)
-            self.logger.info(f"LLM resolution suggestion for issue {issue.issue_id}: {resolution}")
+            response = await self._call_local_slm(prompt)
+            resolution = self._parse_resolution_response(response)
+            self.logger.info(f"SLM resolution suggestion for issue {issue.issue_id}: {resolution}")
             return resolution
-            
-        except Exception as e:
-            self.logger.error(f"Error in LLM resolution suggestion: {e}")
+        else:
             return self._fallback_resolution_suggestion(issue)
     
     def _prepare_issue_context(self, issue: Issue, available_workers: List[Dict]) -> Dict:
