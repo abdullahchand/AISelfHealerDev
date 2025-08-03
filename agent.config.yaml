@@ -4,7 +4,7 @@
 master:
   agent_id: "master-001"
   host: "localhost"
-  port: 50051
+  http_port: 50051
   heartbeat_interval: 30
   max_retries: 3
   timeout: 60

@@ -67,4 +67,5 @@ Icon?
 *.ntvs*
 *.njsproj
 *.sln
-*.sw? 
+*.sw?
+GEMINI.md

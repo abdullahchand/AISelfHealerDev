@@ -3,19 +3,19 @@ import './App.css';
 
 // API utility
 async function fetchWorkers() {
-  const res = await fetch('http://localhost:8000/api/workers');
+  const res = await fetch('http://localhost:8081/api/workers');
   return res.json();
 }
 async function fetchWorkerDetail(workerId: string) {
-  const res = await fetch(`http://localhost:8000/api/worker/${workerId}`);
+  const res = await fetch(`http://localhost:8081/api/worker/${workerId}`);
   return res.json();
 }
 async function fetchWorkerProcesses(workerId: string) {
-  const res = await fetch(`http://localhost:8000/api/worker/${workerId}/processes`);
+  const res = await fetch(`http://localhost:8081/api/worker/${workerId}/processes`);
   return res.json();
 }
 async function sendWorkerCommand(workerId: string, data: any) {
-  const res = await fetch(`http://localhost:8000/api/worker/${workerId}/command`, {
+  const res = await fetch(`http://localhost:8081/api/worker/${workerId}/command`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -120,7 +120,7 @@ function App() {
   const handleAddWorker = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreatingWorker(true);
-    const res = await fetch('http://localhost:8000/api/workers', {
+    const res = await fetch('http://localhost:8081/api/workers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ worker_id: newWorkerId }),
@@ -129,9 +129,20 @@ function App() {
     if (data.worker_id) {
       setCreatedWorkerId(data.worker_id);
       // Open terminal WebSocket
-      const ws = new window.WebSocket(`ws://localhost:8000/ws/worker/${data.worker_id}/terminal`);
+      const ws = new window.WebSocket(`ws://localhost:8081/ws/worker/${data.worker_id}/terminal`);
+      ws.onopen = () => {
+        setTerminalLines((lines) => [...lines, "WebSocket connection established."]);
+      };
       ws.onmessage = (event) => {
         setTerminalLines((lines) => [...lines, event.data]);
+      };
+      ws.onerror = (event) => {
+        console.error("WebSocket error:", event);
+        setTerminalLines((lines) => [...lines, "WebSocket error. See console for details."]);
+      };
+      ws.onclose = (event) => {
+        setTerminalLines((lines) => [...lines, `WebSocket connection closed: ${event.reason || "No reason given"}`]);
+        setTerminalSocket(null);
       };
       setTerminalSocket(ws);
     }
@@ -362,4 +373,4 @@ function App() {
   );
 }
 
-export default App; 
+export default App;

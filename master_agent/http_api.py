@@ -1,37 +1,46 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from fastapi import FastAPI, Request
-from master_agent.master import MasterAgent
 from shared.llm_analyzer import LLMAnalyzer
 from shared.models import Issue
 import asyncio
 
+from master_agent.master import MasterAgent
+
 app = FastAPI()
-master = MasterAgent()
+master_agent_instance: "MasterAgent" = MasterAgent()
 llm_analyzer = LLMAnalyzer()
+
+def set_master_agent(agent: "MasterAgent"):
+    global master_agent_instance
+    master_agent_instance = agent
 
 # Store pending commands for dashboard shell workers
 pending_commands = {}
 
 @app.get("/api/master/status")
 def get_status():
-    return master.get_status()
+    return master_agent_instance.get_status()
 
 @app.get("/api/master/workers")
 def get_workers():
-    return {"workers": list(master.agent_registry.workers)}
+    if not master_agent_instance:
+        return {"workers": {}}
+    return {"workers": master_agent_instance.agent_registry.get_all_workers_info()}
 
 @app.get("/api/master/issues")
 def get_issues():
-    return {"issues": [i.dict() if hasattr(i, 'dict') else i for i in master.active_issues]}
+    return {"issues": [i.dict() if hasattr(i, 'dict') else i for i in master_agent_instance.active_issues]}
 
 @app.get("/api/master/tasks")
 def get_tasks():
-    return {"tasks": [t.dict() for t in master.active_tasks.values()]}
+    return {"tasks": [t.dict() for t in master_agent_instance.active_tasks.values()]}
 
 @app.post("/api/master/report_issue")
 async def report_issue(request: Request):
     data = await request.json()
     # Store as dict for now
-    master.active_issues.append({
+    master_agent_instance.active_issues.append({
         "worker_id": data["worker_id"],
         "description": data["description"],
         "logs": data["logs"],

@@ -107,23 +107,19 @@ def start_process(command: str, working_dir: Optional[str] = None,
 
 def get_system_resources() -> Dict[str, float]:
     """Get current system resource usage."""
-    try:
-        cpu_percent = psutil.cpu_percent(interval=1)
-        memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
-        
-        return {
-            "cpu_percent": cpu_percent,
-            "memory_percent": memory.percent,
-            "memory_available": memory.available,
-            "memory_total": memory.total,
-            "disk_percent": disk.percent,
-            "disk_free": disk.free,
-            "disk_total": disk.total
-        }
-    except Exception as e:
-        logging.error(f"Error getting system resources: {e}")
-        return {}
+    cpu_percent = psutil.cpu_percent(interval=1)
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
+    
+    return {
+        "cpu_percent": cpu_percent,
+        "memory_percent": memory.percent,
+        "memory_available": memory.available,
+        "memory_total": memory.total,
+        "disk_percent": disk.percent,
+        "disk_free": disk.free,
+        "disk_total": disk.total
+    }
 
 
 def parse_logs_for_errors(logs: List[str]) -> List[Dict]:

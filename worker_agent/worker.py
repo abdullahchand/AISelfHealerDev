@@ -145,9 +145,11 @@ class WorkerAgent:
                 for app_name, process_info in self.managed_apps.items():
                     # Get recent logs
                     logs = await self.runtime_manager.get_app_logs(app_name)
+                    print(f"LOGS {logs}")
                     
                     # Parse logs for issues
                     issues = self.log_parser.parse_logs_for_issues(logs, app_name)
+                    print(f"Issues in worker: {issues}")
                     
                     # Report new issues to master
                     for issue in issues:
@@ -333,18 +335,18 @@ class WorkerAgent:
             ]
         } 
 
-if __name__ == "__main__":
-    import argparse
-    import asyncio
-    parser = argparse.ArgumentParser(description="Start a Worker Agent")
-    parser.add_argument('--worker_id', type=str, default='worker-001', help='Worker ID')
-    parser.add_argument('--config', type=str, default='agent.config.yaml', help='Config file path')
-    args = parser.parse_args()
-    print(f"[WorkerAgent] Starting worker agent with ID {args.worker_id}...")
-    try:
-        agent = WorkerAgent(worker_id=args.worker_id, config_path=args.config)
-        asyncio.run(agent.start())
-    except Exception as e:
-        print(f"[WorkerAgent] Exception: {e}")
-        import traceback
-        traceback.print_exc() 
+# if __name__ == "__main__":
+#     import argparse
+#     import asyncio
+#     parser = argparse.ArgumentParser(description="Start a Worker Agent")
+#     parser.add_argument('--worker_id', type=str, default='worker-001', help='Worker ID')
+#     parser.add_argument('--config', type=str, default='agent.config.yaml', help='Config file path')
+#     args = parser.parse_args()
+#     print(f"[WorkerAgent] Starting worker agent with ID {args.worker_id}...")
+#     try:
+#         agent = WorkerAgent(worker_id=args.worker_id, config_path=args.config)
+#         asyncio.run(agent.start())
+#     except Exception as e:
+#         print(f"[WorkerAgent] Exception: {e}")
+#         import traceback
+#         traceback.print_exc() 

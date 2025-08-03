@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import sys
 import os
 import requests
+import uvicorn
+from master_agent import http_api
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../shared')))
 from shared import agent_pb2, agent_pb2_grpc
 
@@ -64,7 +66,10 @@ class MasterAgent:
             self.logger.info("Starting Master Agent...")
             
             # Start gRPC server
-            await self._start_grpc_server()
+            asyncio.create_task(self._start_grpc_server())
+            
+            # Start HTTP API server
+            asyncio.create_task(self._start_http_api_server())
             
             # Start background tasks
             asyncio.create_task(self._heartbeat_monitor())
@@ -103,6 +108,14 @@ class MasterAgent:
         await server.start()
         self.logger.info("gRPC server started")
         await server.wait_for_termination()
+
+    async def _start_http_api_server(self):
+        """Start the FastAPI HTTP API server."""
+        self.logger.info(f"Starting HTTP API server on {self.config.host}:{9001}")
+        http_api.set_master_agent(self)
+        config = uvicorn.Config(http_api.app, host=self.config.host, port=9001, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
     
     async def _heartbeat_monitor(self):
         """Monitor worker heartbeats."""
@@ -176,23 +189,18 @@ class MasterAgent:
     async def _resource_monitor(self):
         """Monitor system resources."""
         while self.running:
-            try:
-                # Get system resources
-                resources = get_system_resources()
-                self.state.environment_state.system_resources = resources
-                
-                # Check for resource issues
-                if resources.get("cpu_percent", 0) > 80:
-                    self.logger.warning("High CPU usage detected")
-                
-                if resources.get("memory_percent", 0) > 85:
-                    self.logger.warning("High memory usage detected")
-                
-                await asyncio.sleep(30)
-                
-            except Exception as e:
-                self.logger.error(f"Error in resource monitor: {e}")
-                await asyncio.sleep(60)
+            # Get system resources
+            resources = get_system_resources()
+            self.state.environment_state.system_resources = resources
+            
+            # Check for resource issues
+            if resources.get("cpu_percent", 0) > 80:
+                self.logger.warning("High CPU usage detected")
+            
+            if resources.get("memory_percent", 0) > 85:
+                self.logger.warning("High memory usage detected")
+            
+            await asyncio.sleep(30)
     
     def _find_available_worker(self, task: Task) -> Optional[str]:
         """Find an available worker for a task."""
@@ -271,7 +279,7 @@ class MasterAgent:
                 )
                 self.add_task(task)
                 # Send command to worker via HTTP API
-                url = f"http://localhost:8000/api/worker/{analysis['target_worker']}/command"
+                url = f"http://localhost:8081/api/worker/{analysis['target_worker']}/command"
                 data = {"action": analysis["recommended_action"]}
                 if "command" in analysis:
                     data["command"] = analysis["command"]
@@ -418,4 +426,5 @@ if __name__ == "__main__":
     import asyncio
     print("[MasterAgent] Starting master agent...")
     agent = MasterAgent()
-    asyncio.run(agent.start()) 
+    asyncio.run(agent.start())
+ 

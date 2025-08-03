@@ -24,7 +24,7 @@ class LLMAnalyzer:
         self.config = ConfigManager().config.get("llm", {})
         self.backend = self.config.get("backend", "slm-local")
         self.model_name = self.config.get("model_name", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
-        self.device = self.config.get("device", "cpu")
+        self.device = self.config.get("device", "cuda")
         self.max_tokens = self.config.get("max_tokens", 512)
         self.temperature = self.config.get("temperature", 0.2)
         self.model = model or self.model_name
@@ -230,7 +230,7 @@ Available Workers: {json.dumps(context['available_workers'], indent=2)}
 
 Please provide a JSON response with:
 1. severity: "low", "medium", "high", "critical"
-2. recommended_action: "restart", "reconfigure", "reassign_port", "install_dependency", "manual_intervention"
+2. recommended_action: The required command to fix the issue. Ensure that you provide the full command for fixing the issue. 
 3. target_worker: worker_id or null
 4. reasoning: brief explanation
 5. estimated_time: minutes
@@ -263,7 +263,7 @@ Logs: {context['issue']['logs']}
 Worker Capabilities: {json.dumps(context['worker_capabilities'], indent=2)}
 
 Provide a JSON response with:
-1. action: specific action to take
+1. action: The required command to fix the issue. Ensure that you provide the full command for fixing the issue. 
 2. steps: array of step-by-step instructions
 3. rollback_plan: how to undo if it fails
 4. success_criteria: how to verify it worked
@@ -282,7 +282,7 @@ Return only the worker_id or null."""
     def _get_resolution_system_prompt(self) -> str:
         """Get system prompt for resolution suggestion."""
         return """You are suggesting resolution strategies for runtime issues. 
-Provide practical, step-by-step solutions that can be automated."""
+Provide practical, step-by-step solutions to fix the issue."""
     
     def _parse_llm_response(self, response: str) -> Dict:
         """Parse LLM response for issue analysis."""
