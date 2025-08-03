@@ -188,21 +188,63 @@ async def get_worker_processes(worker_id: str):
         ]
     }
 
+async def execute_and_report_back(worker_id: str, issue_id: str, command: str, websocket: WebSocket):
+    """Executes a command from the master, captures output, and reports back."""
+    try:
+        # Execute the command in a separate shell
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=worker_cwds.get(worker_id, os.getcwd()) # Use worker's CWD or default
+        )
+
+        stdout, stderr = await proc.communicate()
+        output_lines = []
+
+        if stdout:
+            decoded_stdout = stdout.decode(errors='ignore').strip()
+            output_lines.extend(decoded_stdout.splitlines())
+            await websocket.send_text(f"\n[COMMAND OUTPUT]\n{decoded_stdout}\n")
+        if stderr:
+            decoded_stderr = stderr.decode(errors='ignore').strip()
+            output_lines.extend(decoded_stderr.splitlines())
+            await websocket.send_text(f"\n[COMMAND ERROR]\n{decoded_stderr}\n")
+
+        # Report the output back to the master
+        url = f"{MASTER_API}/issue/{issue_id}/update"
+        update_data = {"logs": output_lines or ["Command executed with no output."]}
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=update_data)
+            if resp.status_code == 200:
+                await websocket.send_text(f"[INFO] Command output reported back to master for issue {issue_id}.\n")
+            else:
+                await websocket.send_text(f"[ERROR] Failed to report command output to master: {resp.text}\n")
+
+    except Exception as e:
+        error_message = f"Failed to execute command '{command}': {e}"
+        await websocket.send_text(f"\n[ERROR] {error_message}\n")
+        # Report the execution error back to the master
+        url = f"{MASTER_API}/issue/{issue_id}/update"
+        update_data = {"logs": [error_message]}
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json=update_data)
+
 async def poll_for_commands(worker_id, stdin, websocket):
-    import httpx
     while True:
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(f"http://localhost:9001/api/worker/{worker_id}/next_command")
                 data = resp.json()
                 if data.get("status") != "no_command":
-                    cmd = data.get("command") or data.get("action")
-                    if cmd:
-                        await websocket.send_text(f"[MASTER COMMAND] Executing: {cmd}\n")
-                        stdin.write(cmd + "\n")
-                        stdin.flush()
+                    cmd = data.get("command")
+                    issue_id = data.get("issue_id")
+                    if cmd and issue_id:
+                        await websocket.send_text(f"\n[MASTER COMMAND] Executing: {cmd}\n")
+                        # Execute in a separate process and report back
+                        asyncio.create_task(execute_and_report_back(worker_id, issue_id, cmd, websocket))
         except Exception as e:
-            await websocket.send_text(f"[MASTER COMMAND] Poll error: {e}\n")
+            await websocket.send_text(f"\n[MASTER COMMAND] Poll error: {e}\n")
         await asyncio.sleep(3)
 
 @app.websocket("/ws/worker/{worker_id}/terminal")
@@ -379,4 +421,4 @@ def report_issue_to_master(worker_id, description, logs):
         resp = requests.post(url, json=data)
         print(f"[DASHBOARD SHELL] Reported issue to master: {resp.json()}")
     except Exception as e:
-        print(f"[DASHBOARD SHELL] Failed to report issue: {e}") 
+        print(f"[DASHBOARD SHELL] Failed to report issue: {e}")

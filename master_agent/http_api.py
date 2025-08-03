@@ -1,19 +1,32 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from fastapi import FastAPI, Request
+from typing import TYPE_CHECKING, List
+from fastapi import FastAPI, Request, HTTPException
 from shared.llm_analyzer import LLMAnalyzer
-from shared.models import Issue
+from shared.models import Issue, IssueType
+from shared.utils import generate_id
 import asyncio
+import time
 
 from master_agent.master import MasterAgent
 
 app = FastAPI()
 master_agent_instance: "MasterAgent" = MasterAgent()
-llm_analyzer = LLMAnalyzer()
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the master agent's background tasks when the API server starts."""
+    asyncio.create_task(master_agent_instance.start_background_tasks())
 
 def set_master_agent(agent: "MasterAgent"):
     global master_agent_instance
     master_agent_instance = agent
+
+def queue_command_for_worker(worker_id: str, command: dict):
+    """Queue a command to be picked up by a worker."""
+    if worker_id not in pending_commands:
+        pending_commands[worker_id] = []
+    pending_commands[worker_id].append(command)
+    master_agent_instance.logger.info(f"Queued command for worker {worker_id}: {command}")
 
 # Store pending commands for dashboard shell workers
 pending_commands = {}
@@ -39,37 +52,55 @@ def get_tasks():
 @app.post("/api/master/report_issue")
 async def report_issue(request: Request):
     data = await request.json()
-    # Store as dict for now
-    master_agent_instance.active_issues.append({
-        "worker_id": data["worker_id"],
-        "description": data["description"],
-        "logs": data["logs"],
-        "timestamp": data["timestamp"]
-    })
-    print(f"[MASTER] Received issue from {data['worker_id']}: {data['description']}")
-    # Use LLMAnalyzer to get a real suggestion
+    worker_id = data["worker_id"]
+
+    # Check for an existing active issue for this worker
+    for issue in master_agent_instance.active_issues:
+        if issue.worker_id == worker_id and issue.status != "resolved":
+            master_agent_instance.logger.info(f"Updating existing issue {issue.issue_id} for worker {worker_id}.")
+            issue.logs.extend(data.get("logs", []))
+            issue.description += f"\nUPDATE: {data['description']}"
+            # Ensure the issue is re-opened for processing
+            issue.status = "open"
+            return {"status": "ok", "message": "Existing issue updated.", "issue_id": issue.issue_id}
+
+    # If no active issue exists, create a new one
     issue = Issue(
-        issue_id="dashboard-shell-issue",
-        worker_id=data["worker_id"],
-        app_name="shell-app",
-        issue_type="process_crash",  # or infer from description
+        issue_id=generate_id(),
+        worker_id=worker_id,
+        app_name=data.get("app_name", "shell-app"),
+        issue_type=IssueType.PROCESS_CRASH,  # This could be inferred
         description=data["description"],
         confidence_score=0.8,
-        logs=data["logs"],
+        logs=data.get("logs", []),
         context={},
-        timestamp=data["timestamp"]
+        timestamp=data.get("timestamp", time.time()),
+        status="open"
     )
-    # For demo, pass empty worker_capabilities
-    suggestion = await llm_analyzer.suggest_resolution(issue, {})
-    print(f"[MASTER][LLM] Suggestion: {suggestion}")
-    if suggestion and suggestion.get("action") and isinstance(suggestion["action"], str):
-        # If the LLM suggests a shell command, queue it
-        fix_cmd = suggestion["action"]
-        if data["worker_id"] not in pending_commands:
-            pending_commands[data["worker_id"]] = []
-        pending_commands[data["worker_id"]].append({"command": fix_cmd})
-        print(f"[MASTER] LLM-queued fix command for {data['worker_id']}: {fix_cmd}")
-    return {"status": "ok", "llm_suggestion": suggestion}
+    
+    master_agent_instance.active_issues.append(issue)
+    master_agent_instance.logger.info(f"New issue {issue.issue_id} reported from worker {worker_id}. It will be processed.")
+    
+    return {"status": "ok", "message": "Issue reported and queued for resolution.", "issue_id": issue.issue_id}
+
+@app.post("/api/master/issue/{issue_id}/update")
+async def update_issue_log(issue_id: str, request: Request):
+    data = await request.json()
+    logs = data.get("logs", [])
+    
+    issue_found = False
+    for issue in master_agent_instance.active_issues:
+        if issue.issue_id == issue_id:
+            issue.logs.extend(logs)
+            issue.status = "open"  # Re-open issue for resolver to pick it up
+            issue_found = True
+            break
+            
+    if not issue_found:
+        raise HTTPException(status_code=404, detail="Issue not found")
+        
+    master_agent_instance.logger.info(f"Received update for issue {issue_id}. New logs added.")
+    return {"status": "updated"}
 
 @app.post("/api/worker/{worker_id}/command")
 async def send_command(worker_id: str, request: Request):
@@ -87,4 +118,4 @@ def get_next_command(worker_id: str):
         cmd = cmds.pop(0)
         print(f"[MASTER] Dispatching command to {worker_id}: {cmd}")
         return cmd
-    return {"status": "no_command"} 
+    return {"status": "no_command"}

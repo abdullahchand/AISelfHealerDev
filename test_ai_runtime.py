@@ -76,7 +76,7 @@ async def test_llm_analyzer():
     
     # Test resolution suggestion
     print("💡 Getting resolution suggestion...")
-    resolution = await llm_analyzer.suggest_resolution(test_issue, available_workers[0])
+    resolution = await llm_analyzer.suggest_resolution(test_issue, available_workers[0]['worker_id'], available_workers[0])
     print(f"✅ Resolution Suggestion: {resolution}")
 
 

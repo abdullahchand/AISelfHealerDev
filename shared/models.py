@@ -37,6 +37,7 @@ class ActionType(str, Enum):
     CHANGE_PORT = "change_port"
     UPDATE_CONFIG = "update_config"
     INSTALL_DEPENDENCY = "install_dependency"
+    RUN_COMMAND = "run_command"
 
 
 class AgentConfig(BaseModel):
@@ -85,10 +86,12 @@ class Issue(BaseModel):
     timestamp: float = Field(default_factory=time.time)
     resolved: bool = False
     resolution: Optional[str] = None
+    status: str = "open"  # "open", "in_progress", "resolved"
 
 
 class Task(BaseModel):
     task_id: str
+    issue_id: Optional[str] = None
     worker_id: str
     action: ActionType
     app_name: str

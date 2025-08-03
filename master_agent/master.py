@@ -4,6 +4,7 @@ load_dotenv()
 import grpc
 import time
 import logging
+import json
 from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import sys
@@ -60,32 +61,34 @@ class MasterAgent:
         
         self.logger.info(f"Master Agent {self.config.agent_id} initialized with LLM capabilities")
     
+    async def start_background_tasks(self):
+        """Starts the background tasks of the master agent."""
+        if self.running:
+            return
+        self.logger.info("Starting Master Agent background tasks...")
+        
+        # Start gRPC server
+        asyncio.create_task(self._start_grpc_server())
+        
+        # Start background tasks
+        asyncio.create_task(self._heartbeat_monitor())
+        asyncio.create_task(self._task_scheduler())
+        asyncio.create_task(self._issue_resolver())
+        asyncio.create_task(self._resource_monitor())
+        
+        self.running = True
+        self.logger.info("Master Agent background tasks started successfully.")
+
     async def start(self):
-        """Start the master agent."""
+        """Start the master agent and run forever (blocking)."""
         try:
-            self.logger.info("Starting Master Agent...")
+            # This method is intended to be called when running master.py directly.
+            # It starts the background tasks and then starts the blocking HTTP server.
+            await self.start_background_tasks()
+            await self._start_http_api_server()
             
-            # Start gRPC server
-            asyncio.create_task(self._start_grpc_server())
-            
-            # Start HTTP API server
-            asyncio.create_task(self._start_http_api_server())
-            
-            # Start background tasks
-            asyncio.create_task(self._heartbeat_monitor())
-            asyncio.create_task(self._task_scheduler())
-            asyncio.create_task(self._issue_resolver())
-            asyncio.create_task(self._resource_monitor())
-            
-            self.running = True
-            self.logger.info("Master Agent started successfully")
-            
-            # Keep running
-            while self.running:
-                await asyncio.sleep(1)
-                
         except Exception as e:
-            self.logger.error(f"Error starting Master Agent: {e}")
+            self.logger.error(f"Error starting Master Agent: {e}", exc_info=True)
             raise
     
     async def stop(self):
@@ -168,22 +171,22 @@ class MasterAgent:
     
     async def _issue_resolver(self):
         """Resolve detected issues."""
+        self.logger.info("Issue resolver task started.")
         while self.running:
             try:
-                # Process active issues
-                for issue in self.active_issues[:]:  # Copy list to avoid modification during iteration
-                    resolution = await self._resolve_issue(issue)
-                    if resolution:
-                        issue.resolved = True
-                        issue.resolution = resolution
-                        self.resolved_issues.append(issue)
-                        self.active_issues.remove(issue)
-                        self.logger.info(f"Issue {issue.issue_id} resolved: {resolution}")
+                self.logger.info(f"Issue resolver loop running. Found {len(self.active_issues)} active issues.")
+                open_issues = [i for i in self.active_issues if i.status == "open"]
+                if open_issues:
+                    self.logger.info(f"Found {len(open_issues)} open issues to process.")
+                    for issue in open_issues[:]:  # Iterate over a copy
+                        await self._resolve_issue(issue)
+                else:
+                    self.logger.info("No open issues to process in this cycle.")
                 
                 await asyncio.sleep(5)
                 
             except Exception as e:
-                self.logger.error(f"Error in issue resolver: {e}")
+                self.logger.error(f"Error in issue resolver: {e}", exc_info=True)
                 await asyncio.sleep(10)
     
     async def _resource_monitor(self):
@@ -247,56 +250,67 @@ class MasterAgent:
             task.status = "assigned"
             self.active_tasks[task.task_id] = task
             
-            # TODO: Send task to worker via gRPC
             self.logger.info(f"Assigned task {task.task_id} to worker {worker_id}")
+
+            # Queue the command for the worker to pick up via HTTP
+            if task.action == ActionType.RUN_COMMAND:
+                command_to_send = {
+                    "command": task.parameters.get("command"),
+                    "issue_id": task.issue_id
+                }
+                if command_to_send["command"]:
+                    http_api.queue_command_for_worker(worker_id, command_to_send)
+                else:
+                    self.logger.error(f"Task {task.task_id} is a RUN_COMMAND task but has no command in parameters.")
             
         except Exception as e:
             self.logger.error(f"Error assigning task {task.task_id} to worker {worker_id}: {e}")
     
-    async def _resolve_issue(self, issue: Issue) -> Optional[str]:
-        """Resolve a detected issue using LLM analysis."""
+    async def _resolve_issue(self, issue: Issue):
+        """Resolve a detected issue using LLM analysis in a loop."""
         try:
-            # Get available workers
-            available_workers = []
-            for worker_id in self.agent_registry.workers:
-                if self.agent_registry.is_worker_healthy(worker_id):
-                    worker_info = self.agent_registry.get_worker_info(worker_id)
-                    if worker_info:
-                        available_workers.append(worker_info)
+            issue.status = "in_progress"
+            self.logger.info(f"Attempting to resolve issue {issue.issue_id} for app {issue.app_name}")
+
+            # Get worker capabilities
+            worker_capabilities = self.agent_registry.get_worker_info(issue.worker_id) or {}
             
-            # Analyze issue with LLM
-            analysis = await self.llm_analyzer.analyze_issue(issue, available_workers)
-            self.logger.info(f"LLM analysis for issue {issue.issue_id}: {analysis}")
-            # Create task based on analysis
-            if analysis.get("auto_fixable", False) and analysis.get("target_worker"):
+            # Get resolution suggestion from LLM
+            resolution = await self.llm_analyzer.suggest_resolution(issue, issue.worker_id, worker_capabilities)
+            self.logger.info(f"LLM resolution suggestion for issue {issue.issue_id}: {resolution}")
+
+            if resolution.get("is_resolved"):
+                issue.resolved = True
+                issue.status = "resolved"
+                issue.resolution = str(resolution)
+                self.resolved_issues.append(issue)
+                if issue in self.active_issues:
+                    self.active_issues.remove(issue)
+                self.logger.info(f"Issue {issue.issue_id} marked as resolved by LLM.")
+                return
+
+            if resolution.get("action"):
+                # Create a task for tracking, then directly assign it.
                 task = Task(
                     task_id=generate_id(),
-                    worker_id=analysis["target_worker"],
-                    action=ActionType(analysis["recommended_action"]),
+                    issue_id=issue.issue_id,
+                    worker_id=issue.worker_id,
+                    action=ActionType.RUN_COMMAND,
                     app_name=issue.app_name,
-                    parameters={"issue_id": issue.issue_id},
-                    priority=1 if analysis["severity"] in ["high", "critical"] else 2
+                    parameters={"command": resolution["action"], "full_resolution": json.dumps(resolution)},
+                    priority=1
                 )
-                self.add_task(task)
-                # Send command to worker via HTTP API
-                url = f"http://localhost:8081/api/worker/{analysis['target_worker']}/command"
-                data = {"action": analysis["recommended_action"]}
-                if "command" in analysis:
-                    data["command"] = analysis["command"]
-                try:
-                    resp = requests.post(url, json=data)
-                    self.logger.info(f"[MASTER->WORKER] Sent {data['action']} to {analysis['target_worker']}: {resp.json()}")
-                except Exception as e:
-                    self.logger.error(f"Failed to send command to worker: {e}")
-                return f"Created {analysis['recommended_action']} task for worker {analysis['target_worker']} and sent command"
-            elif analysis["severity"] in ["high", "critical"]:
-                # For critical issues, try to resolve immediately
-                return await self._resolve_critical_issue(issue, analysis)
+                # Directly assign the task to dispatch the command immediately.
+                await self._assign_task_to_worker(task, issue.worker_id)
+                self.logger.info(f"Created and dispatched task {task.task_id} for issue {issue.issue_id} with command: {resolution['action']}")
             else:
-                return f"Issue requires manual intervention: {analysis['reasoning']}"
+                # If no action, mark for manual review and stop iterating
+                self.logger.warning(f"No action suggested for issue {issue.issue_id}. Marking for manual review.")
+                issue.status = "open" # Or a new "manual_review" status
+
         except Exception as e:
             self.logger.error(f"Error resolving issue {issue.issue_id}: {e}")
-            return None
+            issue.status = "open"  # Re-open on error to allow retry
     
     async def _resolve_critical_issue(self, issue: Issue, analysis: Dict) -> str:
         """Resolve critical issues immediately."""
@@ -367,7 +381,7 @@ class MasterAgent:
             
             # Get resolution suggestion from LLM
             worker_capabilities = self.agent_registry.get_worker_info(issue.worker_id) or {}
-            resolution = await self.llm_analyzer.suggest_resolution(issue, worker_capabilities)
+            resolution = await self.llm_analyzer.suggest_resolution(issue, issue.worker_id, worker_capabilities)
             
             self.logger.info(f"LLM resolution suggestion for issue {issue.issue_id}: {resolution}")
             
@@ -375,6 +389,7 @@ class MasterAgent:
             if resolution.get("action"):
                 task = Task(
                     task_id=generate_id(),
+                    issue_id=issue.issue_id,
                     worker_id=issue.worker_id,
                     action=ActionType(resolution["action"]),
                     app_name=issue.app_name,
